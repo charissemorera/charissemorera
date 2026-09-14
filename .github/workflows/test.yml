@@ -1,0 +1,85 @@
+name: CI Pipeline
+
+on:
+  - push
+  - pull_request
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - stable
+          - oldstable
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go ${{ matrix.runtime }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.runtime }}
+          cache: true
+
+      - name: Check for Go module
+        id: manifest
+        shell: bash
+        run: |
+          if [[ -f go.mod ]]; then
+            echo "found" > "$GITHUB_OUTPUT"
+          else
+            echo "no go.mod found; skipping Go steps" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install Go dependencies
+        if: steps.manifest.outputs.found == 'found'
+        shell: bash
+        run: |
+          go mod download
+
+      - name: Check formatting
+        if: steps.manifest.outputs.found == 'found'
+        shell: bash
+        run: |
+          if ! diff -u <(gofmt -d $(find . -name '*.go' -not -path './.git/*' -not -path './vendor/*')) /dev/null; then
+            echo 'Go formatting check failed' >&2
+            exit 1
+          fi
+
+      - name: Run Go tests
+        if: steps.manifest.outputs.found == 'found'
+        shell: bash
+        run: |
+          go test ./...
+
+      - name: Build Go binaries
+        if: steps.manifest.outputs.found == 'found'
+        shell: bash
+        run: |
+          go build ./...
+
+      - name: Write CI summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### CI Pipeline'
+            echo
+            echo '| Check | Outcome |'
+            echo '| --- | --- |'
+            echo "| Manifest | ${{ steps.manifest.outcome }} |"
+            echo "| Dependencies | ${{ steps.install-deps.outcome }} |"
+            echo "| Formatting | ${{ steps.format.outcome }} |"
+            echo "| Tests | ${{ steps.tests.outcome }} |"
+            echo "| Build | ${{ steps.build.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
